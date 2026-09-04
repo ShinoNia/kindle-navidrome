@@ -384,7 +384,7 @@ ${PYTHON} -m PyInstaller \
     --clean \
     --onefile \
     --name kindle-navidrome \
-    app.py
+    app2.py
 
 
 # ============================================================
