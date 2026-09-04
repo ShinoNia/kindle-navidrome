@@ -19,21 +19,16 @@ jobs:
         uses: actions/checkout@v4
 
 
+
       # ========================================================
-      # CHECK BUILDER
+      # DOWNLOAD PREBUILT DOCKER IMAGE
       # ========================================================
 
-      - name: Check ARMv7 builder
+      - name: Download ARMv7 Docker builder
         run: |
 
-          if [ ! -f armv7-builder.tar.gz ]; then
-            echo "ERROR: armv7-builder.tar.gz is missing"
-            echo
-            echo "Download the artifact from the"
-            echo "'Build ARMv7 Docker' workflow and place it"
-            echo "in the repository root."
-            exit 1
-          fi
+          wget -O armv7-builder.tar.gz \
+            "https://github.com/ShinoNia/kindle-navidrome/releases/download/test/armv7-builder.tar.gz"
 
           ls -lh armv7-builder.tar.gz
 
