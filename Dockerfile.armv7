@@ -52,13 +52,15 @@ RUN sed -i \
         binutils \
     && rm -rf /var/lib/apt/lists/*
 
+
 # ============================================================
 # OPENSSL 1.0.2u
 # ============================================================
 
 WORKDIR /tmp
 
-RUN wget https://www.openssl.org/source/openssl-1.0.2u.tar.gz \
+RUN wget \
+        https://www.openssl.org/source/openssl-1.0.2u.tar.gz \
     && tar -xzf openssl-1.0.2u.tar.gz \
     && cd openssl-1.0.2u \
     && ./config \
@@ -66,40 +68,80 @@ RUN wget https://www.openssl.org/source/openssl-1.0.2u.tar.gz \
         --openssldir=/opt/openssl-1.0.2u \
         shared \
         zlib \
-    && make -j$(nproc) \
+    && make -j4 \
     && make install \
     && cd / \
     && rm -rf \
         /tmp/openssl-1.0.2u \
         /tmp/openssl-1.0.2u.tar.gz
 
-ENV OPENSSL_ROOT=/opt/openssl-1.0.2u
-ENV CPPFLAGS="-I/opt/openssl-1.0.2u/include"
-ENV CFLAGS="-I/opt/openssl-1.0.2u/include"
-ENV LDFLAGS="-L/opt/openssl-1.0.2u/lib -Wl,-rpath,/opt/openssl-1.0.2u/lib"
-ENV LD_LIBRARY_PATH="/opt/openssl-1.0.2u/lib"
-ENV LD_RUN_PATH="/opt/openssl-1.0.2u/lib"
 
 # ============================================================
-# PYTHON 3.7.5
+# OPENSSL
+#
+# IMPORTANT:
+# Do NOT set LD_LIBRARY_PATH globally.
+#
+# Doing so would cause system programs such as wget/curl/git
+# to load the old OpenSSL 1.0.2u libraries.
+# ============================================================
+
+ENV OPENSSL_ROOT=/opt/openssl-1.0.2u
+
+
+# ============================================================
+# DOWNLOAD PYTHON
+#
+# This happens using Ubuntu's normal/system OpenSSL.
 # ============================================================
 
 WORKDIR /tmp
 
-RUN wget https://www.python.org/ftp/python/3.7.5/Python-3.7.5.tgz \
-    && tar -xzf Python-3.7.5.tgz \
-    && cd Python-3.7.5 \
+RUN wget \
+        https://www.python.org/ftp/python/3.7.5/Python-3.7.5.tgz \
+    && tar -xzf Python-3.7.5.tgz
+
+
+# ============================================================
+# BUILD PYTHON 3.7.5
+#
+# Explicitly use our OpenSSL.
+# ============================================================
+
+WORKDIR /tmp/Python-3.7.5
+
+RUN export CPPFLAGS="-I/opt/openssl-1.0.2u/include" \
+    && export CFLAGS="-I/opt/openssl-1.0.2u/include" \
+    && export LDFLAGS="-L/opt/openssl-1.0.2u/lib -Wl,-rpath,/opt/openssl-1.0.2u/lib" \
+    && export LD_RUN_PATH="/opt/openssl-1.0.2u/lib" \
     && ./configure \
         --prefix=/opt/python-3.7.5 \
         --with-openssl=/opt/openssl-1.0.2u \
-    && make -j2 \
-    && make install \
-    && cd / \
-    && rm -rf \
+    && make -j4 \
+    && make install
+
+
+# ============================================================
+# CLEAN PYTHON SOURCE
+# ============================================================
+
+RUN rm -rf \
         /tmp/Python-3.7.5 \
         /tmp/Python-3.7.5.tgz
 
-ENV PYTHON=/opt/python-3.7.5/bin/python3
+
+# ============================================================
+# VERIFY PYTHON
+# ============================================================
+
+RUN /opt/python-3.7.5/bin/python3 --version \
+    && /opt/python-3.7.5/bin/python3 -c \
+        "import ssl; print(ssl.OPENSSL_VERSION)" \
+    && /opt/python-3.7.5/bin/python3 -c \
+        "import platform; print(platform.machine())" \
+    && /opt/python-3.7.5/bin/python3 -c \
+        "import struct; print(str(struct.calcsize('P') * 8) + '-bit')"
+
 
 # ============================================================
 # PIP
@@ -112,11 +154,13 @@ RUN /opt/python-3.7.5/bin/python3 -m ensurepip \
         "setuptools<70" \
         wheel
 
+
 # ============================================================
 # PYINSTALLER
 # ============================================================
 
 RUN /opt/python-3.7.5/bin/python3 -m pip install pyinstaller
+
 
 # ============================================================
 # WORKSPACE
