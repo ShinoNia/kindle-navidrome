@@ -33,6 +33,11 @@ echo "Python architecture:"
 ${PYTHON} -c \
     "import struct; print(str(struct.calcsize('P') * 8) + '-bit')"
 
+echo
+echo "OpenSSL:"
+${PYTHON} -c \
+    "import ssl; print(ssl.OPENSSL_VERSION)"
+
 
 # ============================================================
 # APPLICATION DEPENDENCIES
@@ -105,7 +110,7 @@ rm -rf dist
 
 
 # ============================================================
-# BUILD
+# BUILD APPLICATION
 # ============================================================
 
 echo
