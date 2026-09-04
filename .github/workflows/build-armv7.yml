@@ -1,4 +1,4 @@
-name: Build ARMv7 fast
+name: Build ARMv7
 
 on:
   workflow_dispatch:
@@ -20,13 +20,20 @@ jobs:
 
 
       # ========================================================
-      # CHECK ARMv7 BUILDER EXISTS
+      # CHECK BUILDER
       # ========================================================
 
       - name: Check ARMv7 builder
         run: |
 
-          test -f armv7-builder.tar.gz
+          if [ ! -f armv7-builder.tar.gz ]; then
+            echo "ERROR: armv7-builder.tar.gz is missing"
+            echo
+            echo "Download the artifact from the"
+            echo "'Build ARMv7 Docker' workflow and place it"
+            echo "in the repository root."
+            exit 1
+          fi
 
           ls -lh armv7-builder.tar.gz
 
@@ -59,11 +66,20 @@ jobs:
       - name: Verify ARMv7 environment
         run: |
 
+          echo "Python:"
           docker run --rm \
             --platform linux/arm/v7 \
             kindle-navidrome-armv7:latest \
             /opt/python-3.7.5/bin/python3 \
             --version
+
+          echo
+          echo "OpenSSL:"
+          docker run --rm \
+            --platform linux/arm/v7 \
+            kindle-navidrome-armv7:latest \
+            /opt/python-3.7.5/bin/python3 \
+            -c "import ssl; print(ssl.OPENSSL_VERSION)"
 
 
       # ========================================================
