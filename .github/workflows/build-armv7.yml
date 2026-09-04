@@ -1,4 +1,4 @@
-name: Build ARMv7
+name: Build ARMv7 fast
 
 on:
   workflow_dispatch:
