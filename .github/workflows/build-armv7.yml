@@ -1,0 +1,94 @@
+name: Build ARMv7 fast
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+
+      # ========================================================
+      # CHECKOUT
+      # ========================================================
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      # ========================================================
+      # CHECK ARMv7 BUILDER EXISTS
+      # ========================================================
+
+      - name: Check ARMv7 builder
+        run: |
+
+          test -f armv7-builder.tar.gz
+
+          ls -lh armv7-builder.tar.gz
+
+
+      # ========================================================
+      # QEMU
+      # ========================================================
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+
+      # ========================================================
+      # LOAD PREBUILT DOCKER IMAGE
+      # ========================================================
+
+      - name: Load ARMv7 Docker image
+        run: |
+
+          gunzip -c armv7-builder.tar.gz \
+            | docker load
+
+
+      # ========================================================
+      # VERIFY DOCKER IMAGE
+      # ========================================================
+
+      - name: Verify ARMv7 environment
+        run: |
+
+          docker run --rm \
+            --platform linux/arm/v7 \
+            kindle-navidrome-armv7:latest \
+            /opt/python-3.7.5/bin/python3 \
+            --version
+
+
+      # ========================================================
+      # BUILD APPLICATION
+      # ========================================================
+
+      - name: Build ARMv7 application
+        run: |
+
+          docker run --rm \
+            --platform linux/arm/v7 \
+            -v "$PWD:/src" \
+            -w /src \
+            kindle-navidrome-armv7:latest \
+            bash /src/build-armv7.sh
+
+
+      # ========================================================
+      # UPLOAD APPLICATION
+      # ========================================================
+
+      - name: Upload ARMv7 application
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: kindle-navidrome-armv7
+          path: dist/
+          if-no-files-found: error
