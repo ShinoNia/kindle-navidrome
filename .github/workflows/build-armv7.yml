@@ -27,8 +27,7 @@ jobs:
       - name: Download ARMv7 Docker builder
         run: |
 
-          wget -O armv7-builder.tar.gz \
-            "https://github.com/ShinoNia/kindle-navidrome/releases/download/test/armv7-builder.tar.gz"
+          wget -O armv7-builder.tar.gz  "https://github.com/ShinoNia/kindle-navidrome/releases/download/test/armv7-builder.tar.gz"
 
           ls -lh armv7-builder.tar.gz
 
