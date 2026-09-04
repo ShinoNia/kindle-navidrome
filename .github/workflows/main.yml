@@ -1,0 +1,70 @@
+name: Build ARMv7
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-22.04
+
+    steps:
+
+      # ========================================================
+      # CHECKOUT
+      # ========================================================
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      # ========================================================
+      # ARM EMULATION
+      # ========================================================
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+
+      # ========================================================
+      # BUILD
+      #
+      # Everything below runs inside:
+      #
+      #   Ubuntu 14.04
+      #   ARMv7
+      #
+      # ========================================================
+
+      - name: Build ARMv7 application
+        run: |
+
+          docker run --rm \
+            --platform linux/arm/v7 \
+            -v "$PWD:/src" \
+            -w /src \
+            ubuntu:14.04 \
+            bash /src/build-armv7.sh
+
+
+      # ========================================================
+      # UPLOAD ARTIFACT
+      # ========================================================
+
+      - name: Upload ARMv7 application
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: kindle-navidrome-armv7
+
+          path: dist/
+
+          if-no-files-found: error
