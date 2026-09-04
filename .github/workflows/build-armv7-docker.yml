@@ -1,0 +1,99 @@
+name: Build ARMv7 Docker
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  build-docker:
+
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+
+      # ========================================================
+      # CHECKOUT
+      # ========================================================
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      # ========================================================
+      # QEMU
+      # ========================================================
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+
+      # ========================================================
+      # BUILD DOCKER IMAGE
+      # ========================================================
+
+      - name: Build ARMv7 Docker image
+        run: |
+
+          docker buildx build \
+            --platform linux/arm/v7 \
+            --file Dockerfile.armv7 \
+            --tag kindle-navidrome-armv7:latest \
+            --load \
+            .
+
+
+      # ========================================================
+      # VERIFY IMAGE
+      # ========================================================
+
+      - name: Verify Docker image
+        run: |
+
+          docker run --rm \
+            --platform linux/arm/v7 \
+            kindle-navidrome-armv7:latest \
+            /opt/python-3.7.5/bin/python3 \
+            --version
+
+          docker run --rm \
+            --platform linux/arm/v7 \
+            kindle-navidrome-armv7:latest \
+            uname -m
+
+
+      # ========================================================
+      # SAVE IMAGE
+      # ========================================================
+
+      - name: Save Docker image
+        run: |
+
+          docker save \
+            kindle-navidrome-armv7:latest \
+            | gzip > armv7-builder.tar.gz
+
+
+      # ========================================================
+      # SHOW SIZE
+      # ========================================================
+
+      - name: Show image size
+        run: |
+
+          ls -lh armv7-builder.tar.gz
+
+
+      # ========================================================
+      # UPLOAD TAR
+      # ========================================================
+
+      - name: Upload ARMv7 Docker image
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: armv7-builder
+          path: armv7-builder.tar.gz
+          if-no-files-found: error
+          retention-days: 90
