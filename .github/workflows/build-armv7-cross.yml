@@ -1,4 +1,3 @@
-```yaml
 name: Build ARMv7 Python 3.7.5
 
 on:
@@ -575,4 +574,4 @@ jobs:
           path: ${{ github.workspace }}/build/ubuntu14.04-armv7-python3.7.5-openssl1.1.1w.tar.zst
           compression-level: 0
           if-no-files-found: error
-```
+
