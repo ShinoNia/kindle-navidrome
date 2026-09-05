@@ -1,111 +1,49 @@
-name: Build ARMv7 Python cross
+name: Build ARMv7 Python + OpenSSL cross
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  OPENSSL_VERSION: "1.1.1w"
+  PYTHON_VERSION: "3.11.9"
+
+  TARGET: "arm-linux-gnueabihf"
+  SYSROOT: "${{ github.workspace }}/sysroot"
+
+  OPENSSL_PREFIX: "/opt/openssl"
+  PYTHON_PREFIX: "/opt/python"
 
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
 
-    env:
-      OPENSSL_VERSION: "1.1.1"
-      PYTHON_VERSION: "3.7.5"
-      TARGET: arm-linux-gnueabihf
-      JOBS: 16
-
     steps:
-      # ========================================================
-      # CHECKOUT
-      # ========================================================
-
       - name: Checkout
         uses: actions/checkout@v4
 
-
-      # ========================================================
-      # TOOLS
-      # ========================================================
-
-      - name: Install build tools
+      - name: Install cross compiler
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
-            build-essential \
             gcc-arm-linux-gnueabihf \
             g++-arm-linux-gnueabihf \
             binutils-arm-linux-gnueabihf \
-            libc6-dev-armhf-cross \
+            make \
+            perl \
             wget \
             curl \
-            file \
-            xz-utils \
-            bzip2 \
             tar \
-            pkg-config
+            xz-utils \
+            zstd \
+            file \
+            pkg-config \
+            autoconf \
+            automake \
+            libtool
 
-
-      # ========================================================
-      # BUILD ARMv7 SYSROOT
-      # ========================================================
-
-      - name: Prepare Ubuntu 14.04 ARMhf sysroot
-        run: |
-          mkdir -p build
-
-          wget -q \
-            https://cdimage.ubuntu.com/ubuntu-base/releases/14.04/release/ubuntu-base-14.04-core-armhf.tar.gz \
-            -O build/ubuntu-base-armhf.tar.gz
-
-          mkdir -p build/sysroot
-
-          sudo tar \
-            -xzf build/ubuntu-base-armhf.tar.gz \
-            -C build/sysroot
-
-          sudo chown -R "$USER:$USER" build/sysroot
-
-
-      # ========================================================
-      # CROSS COMPILE OPENSSL
-      # ========================================================
-
-      - name: Cross compile OpenSSL
-        run: |
-          chmod +x scripts/build-openssl-armv7.sh
-          ./scripts/build-openssl-armv7.sh
-
-
-      # ========================================================
-      # CROSS COMPILE PYTHON
-      # ========================================================
-
-      - name: Cross compile Python
-        run: |
-          chmod +x scripts/build-python-armv7.sh
-          ./scripts/build-python-armv7.sh
-
-
-      # ========================================================
-      # VERIFY ARTIFACT ARCHITECTURE
-      # ========================================================
-
-      - name: Verify cross compiled binaries
-        run: |
-          file build/rootfs/opt/openssl-1.1.1/bin/openssl || true
-          file build/rootfs/opt/python-3.7.5/bin/python3 || true
-
-          find build/rootfs/opt -type f \
-            \( -name '*.so' -o -name 'python3' -o -name 'openssl' \) \
-            -exec file {} \; \
-            | head -100
-
-
-      # ========================================================
-      # BUILD ARMv7 DOCKER IMAGE
-      # ========================================================
-
-      - name: Set up QEMU
+      - name: Enable ARM emulation
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm
@@ -113,75 +51,319 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build ARMv7 Docker image
+      # ------------------------------------------------------------
+      # Make an Ubuntu 14.04 ARMv7 development sysroot.
+      #
+      # This is important: libc6-dev, headers, crt objects, etc.
+      # come from Trusty, so the resulting binaries target glibc 2.19
+      # rather than the modern GitHub runner's glibc.
+      # ------------------------------------------------------------
+      - name: Create Ubuntu 14.04 ARMv7 sysroot
+        shell: bash
         run: |
+          set -eux
+
+          rm -rf "$SYSROOT"
+          mkdir -p "$SYSROOT"
+
+          docker pull --platform linux/arm/v7 ubuntu:14.04
+
+          CID=$(docker create --platform linux/arm/v7 ubuntu:14.04)
+          trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+
+          docker start "$CID"
+
+          docker exec "$CID" bash -c '
+            set -eux
+
+            sed -i \
+              -e "s|archive.ubuntu.com|old-releases.ubuntu.com|g" \
+              -e "s|security.ubuntu.com|old-releases.ubuntu.com|g" \
+              /etc/apt/sources.list
+
+            apt-get update
+
+            apt-get install -y --no-install-recommends \
+              libc6-dev \
+              linux-libc-dev \
+              zlib1g-dev \
+              libffi-dev \
+              libexpat1-dev
+
+            rm -rf /var/lib/apt/lists/*
+          '
+
+          docker export "$CID" | tar -C "$SYSROOT" -xf -
+
+          echo "Sysroot:"
+          file "$SYSROOT/lib/arm-linux-gnueabihf/ld-2.19.so" || true
+
+          "$TARGET-gcc" \
+            --sysroot="$SYSROOT" \
+            -print-sysroot
+
+      # ------------------------------------------------------------
+      # Build OpenSSL 1.1.1w for ARMv7 hard-float.
+      # ------------------------------------------------------------
+      - name: Build OpenSSL
+        shell: bash
+        run: |
+          set -eux
+
+          mkdir -p build
+          cd build
+
+          wget -q \
+            "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+
+          tar xf "openssl-${OPENSSL_VERSION}.tar.gz"
+          cd "openssl-${OPENSSL_VERSION}"
+
+          export CROSS="${TARGET}-"
+
+          export CFLAGS="\
+            --sysroot=${SYSROOT} \
+            -march=armv7-a \
+            -mfloat-abi=hard \
+            -mfpu=vfpv3-d16 \
+            -O2 \
+          "
+
+          export LDFLAGS="--sysroot=${SYSROOT}"
+
+          ./Configure \
+            linux-armv4 \
+            shared \
+            no-ssl3 \
+            no-comp \
+            --cross-compile-prefix="${CROSS}" \
+            --prefix="${OPENSSL_PREFIX}" \
+            --openssldir="${OPENSSL_PREFIX}/ssl"
+
+          make -j"$(nproc)"
+          make install_sw DESTDIR="${GITHUB_WORKSPACE}/openssl-stage"
+
+          # OpenSSL installs into:
+          #   openssl-stage/opt/openssl
+          #
+          # Strip target binaries/libraries.
+          find "${GITHUB_WORKSPACE}/openssl-stage/opt/openssl" \
+            -type f \
+            \( -name '*.so*' -o -name 'openssl' \) \
+            -exec "${TARGET}-strip" --strip-unneeded {} \; || true
+
+      # ------------------------------------------------------------
+      # Build a native Python of the exact same version.
+      #
+      # Python 3.11's cross-build machinery requires a build Python
+      # matching the target Python version.
+      # ------------------------------------------------------------
+      - name: Build native build-Python
+        shell: bash
+        run: |
+          set -eux
+
+          cd build
+
+          wget -q \
+            "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz"
+
+          tar xf "Python-${PYTHON_VERSION}.tgz"
+          mv "Python-${PYTHON_VERSION}" python-build
+
+          cd python-build
+
+          ./configure \
+            --prefix="${GITHUB_WORKSPACE}/host-python" \
+            --without-ensurepip
+
+          make -j"$(nproc)"
+          make install
+
+          "${GITHUB_WORKSPACE}/host-python/bin/python3" --version
+
+      # ------------------------------------------------------------
+      # Cross compile Python against the Trusty sysroot and our
+      # OpenSSL 1.1.1.
+      # ------------------------------------------------------------
+      - name: Build ARMv7 Python
+        shell: bash
+        run: |
+          set -eux
+
+          cd build
+
+          tar xf "Python-${PYTHON_VERSION}.tgz"
+          mv "Python-${PYTHON_VERSION}" python-armv7
+
+          cd python-armv7
+
+          export CC="${TARGET}-gcc"
+          export CXX="${TARGET}-g++"
+          export AR="${TARGET}-ar"
+          export RANLIB="${TARGET}-ranlib"
+          export STRIP="${TARGET}-strip"
+
+          export CFLAGS="\
+            --sysroot=${SYSROOT} \
+            -march=armv7-a \
+            -mfloat-abi=hard \
+            -mfpu=vfpv3-d16 \
+            -O2 \
+          "
+
+          export CXXFLAGS="${CFLAGS}"
+          export LDFLAGS="\
+            --sysroot=${SYSROOT} \
+            -L${GITHUB_WORKSPACE}/openssl-stage/opt/openssl/lib \
+            -Wl,-rpath,/opt/openssl/lib \
+          "
+
+          export CPPFLAGS="\
+            --sysroot=${SYSROOT} \
+            -I${SYSROOT}/usr/include \
+            -I${GITHUB_WORKSPACE}/openssl-stage/opt/openssl/include \
+          "
+
+          export PKG_CONFIG_SYSROOT_DIR="${SYSROOT}"
+          export PKG_CONFIG_LIBDIR="${SYSROOT}/usr/lib/arm-linux-gnueabihf/pkgconfig:${SYSROOT}/usr/lib/pkgconfig"
+
+          # These answers avoid configure trying to execute target ARM
+          # binaries on the ARM64 build host.
+          cat > config.site <<'EOF'
+          ac_cv_file__dev_ptmx=yes
+          ac_cv_file__dev_ptc=no
+          ac_cv_func_sem_open=yes
+          EOF
+
+          CONFIG_SITE="$PWD/config.site" \
+          ./configure \
+            --build="$(gcc -dumpmachine)" \
+            --host="${TARGET}" \
+            --with-build-python="${GITHUB_WORKSPACE}/host-python/bin/python3" \
+            --with-openssl="${GITHUB_WORKSPACE}/openssl-stage/opt/openssl" \
+            --with-ensurepip \
+            --enable-shared \
+            --prefix="${PYTHON_PREFIX}" \
+            --disable-test-modules
+
+          make -j"$(nproc)"
+          make install DESTDIR="${GITHUB_WORKSPACE}/python-stage"
+
+          # Remove unnecessary caches/docs/tests.
+          rm -rf \
+            "${GITHUB_WORKSPACE}/python-stage/opt/python/share/doc" \
+            "${GITHUB_WORKSPACE}/python-stage/opt/python/lib/python3.11/test"
+
+          find "${GITHUB_WORKSPACE}/python-stage/opt/python" \
+            -type f \
+            -name '*.so' \
+            -exec "${TARGET}-strip" --strip-unneeded {} \; || true
+
+          find "${GITHUB_WORKSPACE}/python-stage/opt/python/bin" \
+            -type f \
+            -exec "${TARGET}-strip" --strip-unneeded {} \; || true
+
+      # ------------------------------------------------------------
+      # Verify that the binaries really are ARMv7 and that they
+      # reference the old glibc rather than the runner's glibc.
+      # ------------------------------------------------------------
+      - name: Verify binaries
+        shell: bash
+        run: |
+          set -eux
+
+          PY="${GITHUB_WORKSPACE}/python-stage/opt/python/bin/python3.11"
+          SSL="${GITHUB_WORKSPACE}/openssl-stage/opt/openssl/bin/openssl"
+
+          file "$PY"
+          file "$SSL"
+
+          echo "Python GLIBC requirements:"
+          "${TARGET}-readelf" --version-info "$PY" \
+            | grep -o 'GLIBC_[0-9.]*' \
+            | sort -Vu || true
+
+          echo "OpenSSL GLIBC requirements:"
+          "${TARGET}-readelf" --version-info "$SSL" \
+            | grep -o 'GLIBC_[0-9.]*' \
+            | sort -Vu || true
+
+          echo "Python interpreter:"
+          "${TARGET}-readelf" -l "$PY" | grep 'interpreter'
+
+          echo "OpenSSL dependencies:"
+          "${TARGET}-readelf" -d "$SSL" | grep NEEDED
+
+      # ------------------------------------------------------------
+      # Create final Ubuntu 14.04 ARMv7 image.
+      # ------------------------------------------------------------
+      - name: Create Dockerfile
+        shell: bash
+        run: |
+          cat > Dockerfile <<'EOF'
+          FROM --platform=linux/arm/v7 ubuntu:14.04
+
+          ENV PATH="/opt/python/bin:/opt/openssl/bin:${PATH}"
+          ENV LD_LIBRARY_PATH="/opt/python/lib:/opt/openssl/lib"
+
+          COPY openssl-stage/opt/openssl /opt/openssl
+          COPY python-stage/opt/python /opt/python
+
+          RUN ln -sf /opt/python/bin/python3.11 /usr/local/bin/python3 \
+           && ln -sf /opt/python/bin/python3.11 /usr/local/bin/python \
+           && ln -sf /opt/openssl/bin/openssl /usr/local/bin/openssl
+
+          CMD ["/bin/bash"]
+          EOF
+
+      - name: Build ARMv7 Docker image
+        shell: bash
+        run: |
+          set -eux
+
           docker buildx build \
             --platform linux/arm/v7 \
-            --file Dockerfile.armv7 \
-            --tag kindle-python-armv7:latest \
             --load \
+            --tag kindle-python:armv7 \
             .
 
-
-      # ========================================================
-      # VERIFY
-      # ========================================================
-
-      - name: Verify Python
+      # ------------------------------------------------------------
+      # Actually execute the ARMv7 image through QEMU.
+      # ------------------------------------------------------------
+      - name: Test Docker image
+        shell: bash
         run: |
-          docker run --rm \
-            --platform linux/arm/v7 \
-            kindle-python-armv7:latest \
-            /opt/python-3.7.5/bin/python3 \
-            --version
+          set -eux
 
           docker run --rm \
             --platform linux/arm/v7 \
-            kindle-python-armv7:latest \
-            /opt/python-3.7.5/bin/python3 \
-            -c 'import ssl; print(ssl.OPENSSL_VERSION)'
+            kindle-python:armv7 \
+            bash -c '
+              uname -m || true
+              cat /etc/os-release
+              python --version
+              python -c "import ssl; print(ssl.OPENSSL_VERSION)"
+              python -c "import sys; print(sys.version)"
+              openssl version
+            '
 
-          docker run --rm \
-            --platform linux/arm/v7 \
-            kindle-python-armv7:latest \
-            /opt/python-3.7.5/bin/python3 \
-            -c 'import platform; print(platform.machine())'
-
-          docker run --rm \
-            --platform linux/arm/v7 \
-            kindle-python-armv7:latest \
-            /opt/python-3.7.5/bin/python3 \
-            -c 'import struct; print(str(struct.calcsize("P") * 8) + "-bit")'
-
-
-      # ========================================================
-      # SAVE
-      # ========================================================
-
-      - name: Save Docker image
+      # ------------------------------------------------------------
+      # Save the complete Docker image as a compressed artifact.
+      # ------------------------------------------------------------
+      - name: Export Docker image
+        shell: bash
         run: |
-          docker save \
-            kindle-python-armv7:latest \
-            | gzip > armv7-python.tar.gz
+          set -eux
 
+          docker save kindle-python:armv7 \
+            | zstd -T0 -19 -o ubuntu14.04-armv7-python-openssl.tar.zst
 
-      # ========================================================
-      # SIZE
-      # ========================================================
+          ls -lh ubuntu14.04-armv7-python-openssl.tar.zst
 
-      - name: Show size
-        run: |
-          ls -lh armv7-python.tar.gz
-
-
-      # ========================================================
-      # UPLOAD
-      # ========================================================
-
-      - name: Upload image
+      - name: Upload Docker image
         uses: actions/upload-artifact@v4
         with:
-          name: armv7-python
-          path: armv7-python.tar.gz
-          if-no-files-found: error
-          retention-days: 90
+          name: ubuntu14.04-armv7-python-openssl
+          path: ubuntu14.04-armv7-python-openssl.tar.zst
+          retention-days: 30
