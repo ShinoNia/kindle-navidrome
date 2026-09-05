@@ -2,8 +2,6 @@ FROM --platform=linux/arm/v7 ubuntu:14.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ENV PATH="/opt/python-3.7.5/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
 # ============================================================
 # Ubuntu 14.04 repositories
 # ============================================================
@@ -17,12 +15,11 @@ RUN sed -i \
 
 
 # ============================================================
-# System dependencies
+# System libraries
 # ============================================================
 
 RUN apt-get update \
     && apt-get install -y \
-        build-essential \
         ca-certificates \
         curl \
         wget \
@@ -72,77 +69,32 @@ RUN apt-get update \
 
 
 # ============================================================
-# OpenSSL 1.1.1
+# Cross-compiled OpenSSL
 # ============================================================
 
-WORKDIR /tmp
-
-RUN wget \
-        https://www.openssl.org/source/openssl-1.1.1.tar.gz \
-    && tar -xzf openssl-1.1.1.tar.gz \
-    && cd openssl-1.1.1 \
-    && ./config \
-        --prefix=/opt/openssl-1.1.1 \
-        --openssldir=/opt/openssl-1.1.1 \
-        shared \
-        zlib \
-    && make -j"$(nproc)" \
-    && make install_sw \
-    && cd / \
-    && rm -rf \
-        /tmp/openssl-1.1.1 \
-        /tmp/openssl-1.1.1.tar.gz
+COPY build/rootfs/opt/openssl-1.1.1 /opt/openssl-1.1.1
 
 
 # ============================================================
-# OpenSSL
-#
-# Do not globally set LD_LIBRARY_PATH here.
-# System wget/curl/git should continue using Ubuntu's libraries.
+# Cross-compiled Python
+# ============================================================
+
+COPY build/rootfs/opt/python-3.7.5 /opt/python-3.7.5
+
+
+# ============================================================
+# Python environment
 # ============================================================
 
 ENV OPENSSL_ROOT=/opt/openssl-1.1.1
 
+ENV PATH="/opt/python-3.7.5/bin:${PATH}"
 
-# ============================================================
-# Python
-# ============================================================
-
-WORKDIR /tmp
-
-RUN wget \
-        https://www.python.org/ftp/python/3.7.5/Python-3.7.5.tgz \
-    && tar -xzf Python-3.7.5.tgz
+ENV LD_LIBRARY_PATH="/opt/openssl-1.1.1/lib:/opt/python-3.7.5/lib"
 
 
 # ============================================================
-# Build Python 3.7.5
-# ============================================================
-
-WORKDIR /tmp/Python-3.7.5
-
-RUN export CPPFLAGS="-I/opt/openssl-1.1.1/include" \
-    && export CFLAGS="-I/opt/openssl-1.1.1/include" \
-    && export LDFLAGS="-L/opt/openssl-1.1.1/lib -Wl,-rpath,/opt/openssl-1.1.1/lib" \
-    && export LD_RUN_PATH="/opt/openssl-1.1.1/lib" \
-    && ./configure \
-        --prefix=/opt/python-3.7.5 \
-        --with-openssl=/opt/openssl-1.1.1 \
-    && make -j"$(nproc)" \
-    && make install
-
-
-# ============================================================
-# Clean Python source
-# ============================================================
-
-RUN rm -rf \
-        /tmp/Python-3.7.5 \
-        /tmp/Python-3.7.5.tgz
-
-
-# ============================================================
-# Verify Python
+# Verify
 # ============================================================
 
 RUN /opt/python-3.7.5/bin/python3 --version \
@@ -178,6 +130,14 @@ RUN /opt/python-3.7.5/bin/python3 -m pip install numpy
 # ============================================================
 
 RUN /opt/python-3.7.5/bin/python3 -m pip install pillow
+
+
+# ============================================================
+# Verify tkinter
+# ============================================================
+
+RUN /opt/python-3.7.5/bin/python3 \
+        -c 'import tkinter; print("tkinter OK")'
 
 
 # ============================================================
