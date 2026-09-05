@@ -54,26 +54,26 @@ RUN sed -i \
 
 
 # ============================================================
-# OPENSSL 1.0.2u
+# OPENSSL 1.1.1
 # ============================================================
 
 WORKDIR /tmp
 
 RUN wget \
-        https://www.openssl.org/source/openssl-1.0.2u.tar.gz \
-    && tar -xzf openssl-1.0.2u.tar.gz \
-    && cd openssl-1.0.2u \
+        https://www.openssl.org/source/openssl-1.1.1.tar.gz \
+    && tar -xzf openssl-1.1.1.tar.gz \
+    && cd openssl-1.1.1 \
     && ./config \
-        --prefix=/opt/openssl-1.0.2u \
-        --openssldir=/opt/openssl-1.0.2u \
+        --prefix=/opt/openssl-1.1.1 \
+        --openssldir=/opt/openssl-1.1.1 \
         shared \
         zlib \
     && make -j4 \
     && make install \
     && cd / \
     && rm -rf \
-        /tmp/openssl-1.0.2u \
-        /tmp/openssl-1.0.2u.tar.gz
+        /tmp/openssl-1.1.1 \
+        /tmp/openssl-1.1.1.tar.gz
 
 
 # ============================================================
@@ -83,10 +83,10 @@ RUN wget \
 # Do NOT set LD_LIBRARY_PATH globally.
 #
 # Doing so would cause system programs such as wget/curl/git
-# to load the old OpenSSL 1.0.2u libraries.
+# to load the old OpenSSL 1.1.1 libraries.
 # ============================================================
 
-ENV OPENSSL_ROOT=/opt/openssl-1.0.2u
+ENV OPENSSL_ROOT=/opt/openssl-1.1.1
 
 
 # ============================================================
@@ -110,13 +110,13 @@ RUN wget \
 
 WORKDIR /tmp/Python-3.7.5
 
-RUN export CPPFLAGS="-I/opt/openssl-1.0.2u/include" \
-    && export CFLAGS="-I/opt/openssl-1.0.2u/include" \
-    && export LDFLAGS="-L/opt/openssl-1.0.2u/lib -Wl,-rpath,/opt/openssl-1.0.2u/lib" \
-    && export LD_RUN_PATH="/opt/openssl-1.0.2u/lib" \
+RUN export CPPFLAGS="-I/opt/openssl-1.1.1/include" \
+    && export CFLAGS="-I/opt/openssl-1.1.1/include" \
+    && export LDFLAGS="-L/opt/openssl-1.1.1/lib -Wl,-rpath,/opt/openssl-1.1.1/lib" \
+    && export LD_RUN_PATH="/opt/openssl-1.1.1/lib" \
     && ./configure \
         --prefix=/opt/python-3.7.5 \
-        --with-openssl=/opt/openssl-1.0.2u \
+        --with-openssl=/opt/openssl-1.1.1 \
     && make -j4 \
     && make install
 
