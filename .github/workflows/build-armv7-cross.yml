@@ -54,7 +54,7 @@ jobs:
           mkdir -p build
 
           wget -q \
-            https://cdimage.ubuntu.com/ubuntu-base/releases/14.04/release/ubuntu-base-14.04.6-core-armhf.tar.gz \
+            https://cdimage.ubuntu.com/ubuntu-base/releases/14.04/release/ubuntu-base-14.04-core-armhf.tar.gz \
             -O build/ubuntu-base-armhf.tar.gz
 
           mkdir -p build/sysroot
