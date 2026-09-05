@@ -98,111 +98,140 @@ jobs:
           rm -rf "$SYSROOT"
           mkdir -p "$SYSROOT"
 
-          docker pull --platform linux/arm/v7 ubuntu:14.04
+# ------------------------------------------------------------
+# Create an Ubuntu 14.04 ARMv7 container and use its filesystem
+# as the glibc 2.19-era sysroot.
+#
+# IMPORTANT:
+# Do NOT use --memory-swap=6g here.
+# QEMU + apt/dpkg can temporarily need more memory than the
+# container's RAM limit, and swap gives it somewhere to go.
+# ------------------------------------------------------------
 
-          CID=$(docker create \
-            --platform linux/arm/v7 \
-            --memory=6g \
-            --memory-swap=6g \
-            ubuntu:14.04 \
-            /bin/bash)
+docker pull --platform linux/arm/v7 ubuntu:14.04
 
-          cleanup() {
-            docker rm -f "$CID" >/dev/null 2>&1 || true
-          }
+CID=$(docker create \
+  --platform linux/arm/v7 \
+  --memory=6g \
+  --memory-swap=0 \
+  ubuntu:14.04 \
+  /bin/bash)
 
-          trap cleanup EXIT
+cleanup() {
+    docker rm -f "$CID" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-          docker start "$CID"
+docker start "$CID"
 
-          docker exec "$CID" bash -c '
-            set -eux
+docker exec "$CID" bash -c '
+    set -eux
 
-            # ------------------------------------------------------
-            # Ubuntu 14.04 is EOL.
-            # Redirect Trusty repositories to old-releases.
-            # ------------------------------------------------------
+    export DEBIAN_FRONTEND=noninteractive
 
-            sed -i \
-              -e "s|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" \
-              -e "s|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" \
-              /etc/apt/sources.list
+    # --------------------------------------------------------
+    # Ubuntu 14.04 is EOL.
+    # --------------------------------------------------------
 
-            # ------------------------------------------------------
-            # Keep apt as small as possible.
-            # ------------------------------------------------------
+    sed -i \
+      -e "s|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" \
+      -e "s|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" \
+      /etc/apt/sources.list
 
-            cat >/etc/apt/apt.conf.d/99minimal <<EOF
-            APT::Install-Recommends "false";
-            APT::Install-Suggests "false";
-            Acquire::Languages "none";
-            EOF
+    # --------------------------------------------------------
+    # Keep apt as small as possible.
+    # --------------------------------------------------------
 
-            # ------------------------------------------------------
-            # Update package lists.
-            # ------------------------------------------------------
+    cat >/etc/apt/apt.conf.d/99minimal <<EOF
+APT::Install-Recommends "false";
+APT::Install-Suggests "false";
+Acquire::Languages "none";
+Acquire::CompressionTypes::Order "gz";
+EOF
 
-            apt-get update
+    # --------------------------------------------------------
+    # Update package lists.
+    # --------------------------------------------------------
 
-            # ------------------------------------------------------
-            # Development libraries required by Python.
-            # ------------------------------------------------------
+    apt-get update
 
-            apt-get install -y \
-              libc6-dev \
-              linux-libc-dev \
-              zlib1g-dev \
-              libffi-dev \
-              libexpat1-dev \
-              libbz2-dev \
-              libsqlite3-dev \
-              libncurses5-dev \
-              libreadline6-dev \
-              libgdbm-dev \
-              liblzma-dev
+    # --------------------------------------------------------
+    # Install packages one at a time.
+    #
+    # This is deliberately done separately because dpkg running
+    # through QEMU can consume a surprisingly large amount of
+    # memory during a large transaction.
+    # --------------------------------------------------------
 
-            # ------------------------------------------------------
-            # Remove apt cache.
-            # The actual filesystem will become our sysroot.
-            # ------------------------------------------------------
+    apt-get install -y --no-install-recommends libc6-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-            rm -rf /var/lib/apt/lists/*
-            rm -rf /var/cache/apt/*
-          '
+    apt-get update
+    apt-get install -y --no-install-recommends linux-libc-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          # --------------------------------------------------------
-          # Export the ARMv7 filesystem.
-          # --------------------------------------------------------
+    apt-get update
+    apt-get install -y --no-install-recommends zlib1g-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          docker export "$CID" \
-            | tar -C "$SYSROOT" -xf -
+    apt-get update
+    apt-get install -y --no-install-recommends libffi-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          echo
-          echo "============================================================"
-          echo "SYSROOT"
-          echo "============================================================"
+    apt-get update
+    apt-get install -y --no-install-recommends libexpat1-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          du -sh "$SYSROOT"
+    apt-get update
+    apt-get install -y --no-install-recommends libbz2-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          echo
-          echo "libc:"
+    apt-get update
+    apt-get install -y --no-install-recommends libsqlite3-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          file \
-            "$SYSROOT/lib/arm-linux-gnueabihf/libc-2.19.so"
+    apt-get update
+    apt-get install -y --no-install-recommends libncurses5-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          echo
-          echo "dynamic loader:"
+    apt-get update
+    apt-get install -y --no-install-recommends libreadline6-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          file \
-            "$SYSROOT/lib/ld-linux-armhf.so.3"
+    apt-get update
+    apt-get install -y --no-install-recommends libgdbm-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          echo
-          echo "headers:"
+    apt-get update
+    apt-get install -y --no-install-recommends liblzma-dev
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-          test -f "$SYSROOT/usr/include/stdio.h"
-          test -f "$SYSROOT/usr/include/stdlib.h"
+    # --------------------------------------------------------
+    # Final cleanup.
+    # --------------------------------------------------------
 
-          echo "OK"
+    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/cache/apt/*
+    rm -rf /var/log/*
+'
+
+# ------------------------------------------------------------
+# Export the actual ARMv7 container filesystem.
+# ------------------------------------------------------------
+
+mkdir -p "$SYSROOT"
+
+docker export "$CID" | tar -C "$SYSROOT" -xf -
+
+# Remove files that should not be part of a compiler sysroot.
+rm -rf \
+  "$SYSROOT/proc" \
+  "$SYSROOT/sys" \
+  "$SYSROOT/dev" \
+  "$SYSROOT/run"
+
+echo "ARMv7 Ubuntu 14.04 sysroot created:"
+du -sh "$SYSROOT"
 
 
       # ============================================================
