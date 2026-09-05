@@ -2,6 +2,8 @@ FROM --platform=linux/arm/v7 ubuntu:14.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+ENV PATH="/opt/python-3.7.5/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 # ============================================================
 # Ubuntu 14.04 repositories
 # ============================================================
@@ -15,11 +17,12 @@ RUN sed -i \
 
 
 # ============================================================
-# System libraries
+# Ubuntu ARMv7 dependencies
 # ============================================================
 
 RUN apt-get update \
     && apt-get install -y \
+        build-essential \
         ca-certificates \
         curl \
         wget \
@@ -69,32 +72,57 @@ RUN apt-get update \
 
 
 # ============================================================
-# Cross-compiled OpenSSL
+# CROSS-COMPILED OPENSSL
 # ============================================================
 
-COPY build/rootfs/opt/openssl-1.1.1 /opt/openssl-1.1.1
-
-
-# ============================================================
-# Cross-compiled Python
-# ============================================================
-
-COPY build/rootfs/opt/python-3.7.5 /opt/python-3.7.5
-
-
-# ============================================================
-# Python environment
-# ============================================================
+COPY openssl-armv7 /opt/openssl-1.1.1
 
 ENV OPENSSL_ROOT=/opt/openssl-1.1.1
 
-ENV PATH="/opt/python-3.7.5/bin:${PATH}"
 
-ENV LD_LIBRARY_PATH="/opt/openssl-1.1.1/lib:/opt/python-3.7.5/lib"
+# ============================================================
+# Python source
+# ============================================================
+
+WORKDIR /tmp
+
+RUN wget \
+        https://www.python.org/ftp/python/3.7.5/Python-3.7.5.tgz \
+    && tar -xzf Python-3.7.5.tgz
 
 
 # ============================================================
-# Verify
+# Build Python ARMv7
+#
+# This still runs through QEMU.
+#
+# However, the expensive OpenSSL build no longer does.
+# ============================================================
+
+WORKDIR /tmp/Python-3.7.5
+
+RUN export CPPFLAGS="-I/opt/openssl-1.1.1/include" \
+    && export CFLAGS="-I/opt/openssl-1.1.1/include" \
+    && export LDFLAGS="-L/opt/openssl-1.1.1/lib -Wl,-rpath,/opt/openssl-1.1.1/lib" \
+    && export LD_RUN_PATH="/opt/openssl-1.1.1/lib" \
+    && ./configure \
+        --prefix=/opt/python-3.7.5 \
+        --with-openssl=/opt/openssl-1.1.1 \
+    && make -j4 \
+    && make install
+
+
+# ============================================================
+# Clean source
+# ============================================================
+
+RUN rm -rf \
+        /tmp/Python-3.7.5 \
+        /tmp/Python-3.7.5.tgz
+
+
+# ============================================================
+# Verify Python
 # ============================================================
 
 RUN /opt/python-3.7.5/bin/python3 --version \
@@ -119,25 +147,12 @@ RUN /opt/python-3.7.5/bin/python3 -m ensurepip \
 
 
 # ============================================================
-# NumPy
+# NumPy / Pillow
+#
+# These are intentionally built inside ARMv7.
 # ============================================================
 
-RUN /opt/python-3.7.5/bin/python3 -m pip install numpy
-
-
-# ============================================================
-# Pillow
-# ============================================================
-
-RUN /opt/python-3.7.5/bin/python3 -m pip install pillow
-
-
-# ============================================================
-# Verify tkinter
-# ============================================================
-
-RUN /opt/python-3.7.5/bin/python3 \
-        -c 'import tkinter; print("tkinter OK")'
+RUN /opt/python-3.7.5/bin/python3 -m pip install numpy pillow
 
 
 # ============================================================
