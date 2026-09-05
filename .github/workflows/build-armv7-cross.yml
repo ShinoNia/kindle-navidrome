@@ -1,11 +1,17 @@
-name: Build ARMv7 Python Environment cross
+name: Build ARMv7 Python cross
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-docker:
+  build:
     runs-on: ubuntu-24.04-arm
+
+    env:
+      OPENSSL_VERSION: "1.1.1"
+      PYTHON_VERSION: "3.7.5"
+      TARGET: arm-linux-gnueabihf
+      JOBS: 16
 
     steps:
       # ========================================================
@@ -17,7 +23,86 @@ jobs:
 
 
       # ========================================================
-      # QEMU
+      # TOOLS
+      # ========================================================
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            gcc-arm-linux-gnueabihf \
+            g++-arm-linux-gnueabihf \
+            binutils-arm-linux-gnueabihf \
+            libc6-dev-armhf-cross \
+            wget \
+            curl \
+            file \
+            xz-utils \
+            bzip2 \
+            tar \
+            pkg-config
+
+
+      # ========================================================
+      # BUILD ARMv7 SYSROOT
+      # ========================================================
+
+      - name: Prepare Ubuntu 14.04 ARMhf sysroot
+        run: |
+          mkdir -p build
+
+          wget -q \
+            https://cdimage.ubuntu.com/ubuntu-base/releases/14.04/release/ubuntu-base-14.04.6-core-armhf.tar.gz \
+            -O build/ubuntu-base-armhf.tar.gz
+
+          mkdir -p build/sysroot
+
+          sudo tar \
+            -xzf build/ubuntu-base-armhf.tar.gz \
+            -C build/sysroot
+
+          sudo chown -R "$USER:$USER" build/sysroot
+
+
+      # ========================================================
+      # CROSS COMPILE OPENSSL
+      # ========================================================
+
+      - name: Cross compile OpenSSL
+        run: |
+          chmod +x scripts/build-openssl-armv7.sh
+          ./scripts/build-openssl-armv7.sh
+
+
+      # ========================================================
+      # CROSS COMPILE PYTHON
+      # ========================================================
+
+      - name: Cross compile Python
+        run: |
+          chmod +x scripts/build-python-armv7.sh
+          ./scripts/build-python-armv7.sh
+
+
+      # ========================================================
+      # VERIFY ARTIFACT ARCHITECTURE
+      # ========================================================
+
+      - name: Verify cross compiled binaries
+        run: |
+          file build/rootfs/opt/openssl-1.1.1/bin/openssl || true
+          file build/rootfs/opt/python-3.7.5/bin/python3 || true
+
+          find build/rootfs/opt -type f \
+            \( -name '*.so' -o -name 'python3' -o -name 'openssl' \) \
+            -exec file {} \; \
+            | head -100
+
+
+      # ========================================================
+      # BUILD ARMv7 DOCKER IMAGE
       # ========================================================
 
       - name: Set up QEMU
@@ -25,18 +110,8 @@ jobs:
         with:
           platforms: arm
 
-
-      # ========================================================
-      # BUILDX
-      # ========================================================
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-
-      # ========================================================
-      # BUILD
-      # ========================================================
 
       - name: Build ARMv7 Docker image
         run: |
@@ -80,42 +155,6 @@ jobs:
 
 
       # ========================================================
-      # VERIFY MODULES
-      # ========================================================
-
-      - name: Verify tkinter
-        run: |
-          docker run --rm \
-            --platform linux/arm/v7 \
-            kindle-python-armv7:latest \
-            /opt/python-3.7.5/bin/python3 \
-            -c 'import tkinter; print("tkinter OK")'
-
-      - name: Verify FLAC
-        run: |
-          docker run --rm \
-            --platform linux/arm/v7 \
-            kindle-python-armv7:latest \
-            sh -c 'ldconfig -p | grep -i flac || true'
-
-      - name: Verify NumPy
-        run: |
-          docker run --rm \
-            --platform linux/arm/v7 \
-            kindle-python-armv7:latest \
-            /opt/python-3.7.5/bin/python3 \
-            -c 'import numpy; print("NumPy:", numpy.__version__)'
-
-      - name: Verify Pillow
-        run: |
-          docker run --rm \
-            --platform linux/arm/v7 \
-            kindle-python-armv7:latest \
-            /opt/python-3.7.5/bin/python3 \
-            -c 'from PIL import Image; print("Pillow OK")'
-
-
-      # ========================================================
       # SAVE
       # ========================================================
 
@@ -130,7 +169,7 @@ jobs:
       # SIZE
       # ========================================================
 
-      - name: Show image size
+      - name: Show size
         run: |
           ls -lh armv7-python.tar.gz
 
@@ -139,7 +178,7 @@ jobs:
       # UPLOAD
       # ========================================================
 
-      - name: Upload ARMv7 Docker image
+      - name: Upload image
         uses: actions/upload-artifact@v4
         with:
           name: armv7-python
