@@ -1,0 +1,107 @@
+name: Build ARMv7 Python Environment cross compile fast
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # ARMv7 cross compiler
+      # --------------------------------------------------------
+
+      - name: Install ARMv7 cross compiler
+        run: |
+          sudo dpkg --add-architecture armhf
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabihf \
+            g++-arm-linux-gnueabihf \
+            binutils-arm-linux-gnueabihf \
+            libc6-dev-armhf-cross \
+            dpkg-cross \
+            debootstrap \
+            qemu-user-static
+
+      # --------------------------------------------------------
+      # Build OpenSSL + Python natively using ARM cross compiler
+      # --------------------------------------------------------
+
+      - name: Cross compile ARMv7 environment
+        run: |
+          chmod +x build-cross.sh
+          ./build-cross.sh
+
+      # --------------------------------------------------------
+      # Build ARMv7 Docker image
+      # --------------------------------------------------------
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ARMv7 image
+        run: |
+          docker buildx build \
+            --platform linux/arm/v7 \
+            --file Dockerfile.armv7 \
+            --tag kindle-python-armv7:latest \
+            --load \
+            .
+
+      # --------------------------------------------------------
+      # Verify
+      # --------------------------------------------------------
+
+      - name: Verify Python
+        run: |
+          docker run --rm \
+            --platform linux/arm/v7 \
+            kindle-python-armv7:latest \
+            /opt/python-3.7.5/bin/python3 \
+            --version
+
+          docker run --rm \
+            --platform linux/arm/v7 \
+            kindle-python-armv7:latest \
+            /opt/python-3.7.5/bin/python3 \
+            -c "import ssl; print(ssl.OPENSSL_VERSION)"
+
+          docker run --rm \
+            --platform linux/arm/v7 \
+            kindle-python-armv7:latest \
+            /opt/python-3.7.5/bin/python3 \
+            -c "import platform; print(platform.machine())"
+
+      # --------------------------------------------------------
+      # Save image
+      # --------------------------------------------------------
+
+      - name: Save Docker image
+        run: |
+          docker save \
+            kindle-python-armv7:latest \
+            | gzip > armv7-python.tar.gz
+
+      - name: Show image size
+        run: |
+          ls -lh armv7-python.tar.gz
+
+      - name: Upload ARMv7 image
+        uses: actions/upload-artifact@v4
+        with:
+          name: armv7-python
+          path: armv7-python.tar.gz
+          if-no-files-found: error
+          retention-days: 90
