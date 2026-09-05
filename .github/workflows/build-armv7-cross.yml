@@ -1,11 +1,11 @@
-name: Build ARMv7 Python Environment cross fast
+name: Build ARMv7 Python Environment cross
 
 on:
   workflow_dispatch:
 
 jobs:
   build-docker:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
 
     steps:
       # ========================================================
@@ -17,34 +17,7 @@ jobs:
 
 
       # ========================================================
-      # INSTALL ARM CROSS COMPILER
-      # ========================================================
-
-      - name: Install ARMv7 cross compiler
-        run: |
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            gcc-arm-linux-gnueabihf \
-            g++-arm-linux-gnueabihf \
-            binutils-arm-linux-gnueabihf
-
-
-      # ========================================================
-      # CROSS COMPILE OPENSSL
-      # ========================================================
-
-      - name: Build ARMv7 OpenSSL
-        run: |
-          chmod +x build-openssl-armv7.sh
-          ./build-openssl-armv7.sh
-
-
-      # ========================================================
       # QEMU
-      #
-      # Only used for the remaining ARM Docker build.
-      # OpenSSL compilation above is native x86_64.
       # ========================================================
 
       - name: Set up QEMU
@@ -62,7 +35,7 @@ jobs:
 
 
       # ========================================================
-      # BUILD ARMv7 IMAGE
+      # BUILD
       # ========================================================
 
       - name: Build ARMv7 Docker image
@@ -91,48 +64,59 @@ jobs:
             --platform linux/arm/v7 \
             kindle-python-armv7:latest \
             /opt/python-3.7.5/bin/python3 \
-            -c "import ssl; print(ssl.OPENSSL_VERSION)"
+            -c 'import ssl; print(ssl.OPENSSL_VERSION)'
 
           docker run --rm \
             --platform linux/arm/v7 \
             kindle-python-armv7:latest \
             /opt/python-3.7.5/bin/python3 \
-            -c "import platform; print(platform.machine())"
+            -c 'import platform; print(platform.machine())'
 
           docker run --rm \
             --platform linux/arm/v7 \
             kindle-python-armv7:latest \
             /opt/python-3.7.5/bin/python3 \
-            -c "import struct; print(str(struct.calcsize('P') * 8) + '-bit')"
+            -c 'import struct; print(str(struct.calcsize("P") * 8) + "-bit")'
 
 
       # ========================================================
-      # VERIFY OPTIONAL MODULES
+      # VERIFY MODULES
       # ========================================================
 
-      - name: Verify Python modules
+      - name: Verify tkinter
         run: |
           docker run --rm \
             --platform linux/arm/v7 \
             kindle-python-armv7:latest \
             /opt/python-3.7.5/bin/python3 \
-            -c "import tkinter; print('tkinter OK')"
+            -c 'import tkinter; print("tkinter OK")'
 
+      - name: Verify FLAC
+        run: |
+          docker run --rm \
+            --platform linux/arm/v7 \
+            kindle-python-armv7:latest \
+            sh -c 'ldconfig -p | grep -i flac || true'
+
+      - name: Verify NumPy
+        run: |
           docker run --rm \
             --platform linux/arm/v7 \
             kindle-python-armv7:latest \
             /opt/python-3.7.5/bin/python3 \
-            -c "import numpy; print('numpy', numpy.__version__)"
+            -c 'import numpy; print("NumPy:", numpy.__version__)'
 
+      - name: Verify Pillow
+        run: |
           docker run --rm \
             --platform linux/arm/v7 \
             kindle-python-armv7:latest \
             /opt/python-3.7.5/bin/python3 \
-            -c "from PIL import Image; print('Pillow OK')"
+            -c 'from PIL import Image; print("Pillow OK")'
 
 
       # ========================================================
-      # SAVE IMAGE
+      # SAVE
       # ========================================================
 
       - name: Save Docker image
@@ -143,7 +127,7 @@ jobs:
 
 
       # ========================================================
-      # SHOW SIZE
+      # SIZE
       # ========================================================
 
       - name: Show image size
