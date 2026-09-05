@@ -17,13 +17,12 @@ RUN sed -i \
 
 
 # ============================================================
-# Runtime / development libraries
-#
-# These come from Ubuntu rather than being cross-compiled.
+# Ubuntu ARMv7 dependencies
 # ============================================================
 
 RUN apt-get update \
     && apt-get install -y \
+        build-essential \
         ca-certificates \
         curl \
         wget \
@@ -31,18 +30,29 @@ RUN apt-get update \
         make \
         gcc \
         g++ \
+        patch \
         pkg-config \
+        file \
+        binutils \
+        \
         zlib1g \
         zlib1g-dev \
+        \
         libbz2-dev \
         libreadline-dev \
         libsqlite3-dev \
+        \
         libncurses5-dev \
         libncursesw5-dev \
+        \
         libffi-dev \
         liblzma-dev \
-        tk-dev \
-        tcl-dev \
+        \
+        tcl8.6 \
+        tcl8.6-dev \
+        tk8.6 \
+        tk8.6-dev \
+        \
         libx11-6 \
         libx11-dev \
         libxext6 \
@@ -51,41 +61,68 @@ RUN apt-get update \
         libxrender-dev \
         libxft2 \
         libxft-dev \
+        \
         libjpeg-dev \
         libpng12-dev \
         libfreetype6-dev \
-        libflac-dev \
+        \
         libflac8 \
-        file \
-        binutils \
+        libflac-dev \
     && rm -rf /var/lib/apt/lists/*
 
 
 # ============================================================
-# Cross-compiled OpenSSL
+# CROSS-COMPILED OPENSSL
 # ============================================================
 
-COPY cross/opt/openssl-1.1.1 /opt/openssl-1.1.1
+COPY openssl-armv7 /opt/openssl-1.1.1
 
 ENV OPENSSL_ROOT=/opt/openssl-1.1.1
 
 
 # ============================================================
-# Cross-compiled Python
+# Python source
 # ============================================================
 
-COPY cross/opt/python-3.7.5 /opt/python-3.7.5
+WORKDIR /tmp
 
-
-# ============================================================
-# Runtime library search path
-# ============================================================
-
-ENV LD_LIBRARY_PATH="/opt/openssl-1.1.1/lib:/opt/python-3.7.5/lib"
+RUN wget \
+        https://www.python.org/ftp/python/3.7.5/Python-3.7.5.tgz \
+    && tar -xzf Python-3.7.5.tgz
 
 
 # ============================================================
-# Python verification
+# Build Python ARMv7
+#
+# This still runs through QEMU.
+#
+# However, the expensive OpenSSL build no longer does.
+# ============================================================
+
+WORKDIR /tmp/Python-3.7.5
+
+RUN export CPPFLAGS="-I/opt/openssl-1.1.1/include" \
+    && export CFLAGS="-I/opt/openssl-1.1.1/include" \
+    && export LDFLAGS="-L/opt/openssl-1.1.1/lib -Wl,-rpath,/opt/openssl-1.1.1/lib" \
+    && export LD_RUN_PATH="/opt/openssl-1.1.1/lib" \
+    && ./configure \
+        --prefix=/opt/python-3.7.5 \
+        --with-openssl=/opt/openssl-1.1.1 \
+    && make -j4 \
+    && make install
+
+
+# ============================================================
+# Clean source
+# ============================================================
+
+RUN rm -rf \
+        /tmp/Python-3.7.5 \
+        /tmp/Python-3.7.5.tgz
+
+
+# ============================================================
+# Verify Python
 # ============================================================
 
 RUN /opt/python-3.7.5/bin/python3 --version \
@@ -110,7 +147,16 @@ RUN /opt/python-3.7.5/bin/python3 -m ensurepip \
 
 
 # ============================================================
-# Application workspace
+# NumPy / Pillow
+#
+# These are intentionally built inside ARMv7.
+# ============================================================
+
+RUN /opt/python-3.7.5/bin/python3 -m pip install numpy pillow
+
+
+# ============================================================
+# Workspace
 # ============================================================
 
 WORKDIR /src
