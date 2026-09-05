@@ -17,7 +17,7 @@ RUN sed -i \
 
 
 # ============================================================
-# Ubuntu ARMv7 dependencies
+# System dependencies
 # ============================================================
 
 RUN apt-get update \
@@ -72,16 +72,40 @@ RUN apt-get update \
 
 
 # ============================================================
-# CROSS-COMPILED OPENSSL
+# OpenSSL 1.1.1
 # ============================================================
 
-COPY openssl-armv7 /opt/openssl-1.1.1
+WORKDIR /tmp
+
+RUN wget \
+        https://www.openssl.org/source/openssl-1.1.1.tar.gz \
+    && tar -xzf openssl-1.1.1.tar.gz \
+    && cd openssl-1.1.1 \
+    && ./config \
+        --prefix=/opt/openssl-1.1.1 \
+        --openssldir=/opt/openssl-1.1.1 \
+        shared \
+        zlib \
+    && make -j"$(nproc)" \
+    && make install_sw \
+    && cd / \
+    && rm -rf \
+        /tmp/openssl-1.1.1 \
+        /tmp/openssl-1.1.1.tar.gz
+
+
+# ============================================================
+# OpenSSL
+#
+# Do not globally set LD_LIBRARY_PATH here.
+# System wget/curl/git should continue using Ubuntu's libraries.
+# ============================================================
 
 ENV OPENSSL_ROOT=/opt/openssl-1.1.1
 
 
 # ============================================================
-# Python source
+# Python
 # ============================================================
 
 WORKDIR /tmp
@@ -92,11 +116,7 @@ RUN wget \
 
 
 # ============================================================
-# Build Python ARMv7
-#
-# This still runs through QEMU.
-#
-# However, the expensive OpenSSL build no longer does.
+# Build Python 3.7.5
 # ============================================================
 
 WORKDIR /tmp/Python-3.7.5
@@ -108,12 +128,12 @@ RUN export CPPFLAGS="-I/opt/openssl-1.1.1/include" \
     && ./configure \
         --prefix=/opt/python-3.7.5 \
         --with-openssl=/opt/openssl-1.1.1 \
-    && make -j4 \
+    && make -j"$(nproc)" \
     && make install
 
 
 # ============================================================
-# Clean source
+# Clean Python source
 # ============================================================
 
 RUN rm -rf \
@@ -147,12 +167,17 @@ RUN /opt/python-3.7.5/bin/python3 -m ensurepip \
 
 
 # ============================================================
-# NumPy / Pillow
-#
-# These are intentionally built inside ARMv7.
+# NumPy
 # ============================================================
 
-RUN /opt/python-3.7.5/bin/python3 -m pip install numpy pillow
+RUN /opt/python-3.7.5/bin/python3 -m pip install numpy
+
+
+# ============================================================
+# Pillow
+# ============================================================
+
+RUN /opt/python-3.7.5/bin/python3 -m pip install pillow
 
 
 # ============================================================
