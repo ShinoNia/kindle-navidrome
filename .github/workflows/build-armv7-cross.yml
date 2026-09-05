@@ -16,6 +16,7 @@ env:
   TARGET: "arm-linux-gnueabihf"
 
   SYSROOT: "${{ github.workspace }}/sysroot"
+
   OPENSSL_PREFIX: "/opt/openssl"
   PYTHON_PREFIX: "/opt/python"
 
@@ -26,11 +27,16 @@ jobs:
     steps:
 
       # ============================================================
-      # Basic tools
+      # Checkout
       # ============================================================
 
       - name: Checkout
         uses: actions/checkout@v4
+
+
+      # ============================================================
+      # Build dependencies on ARM64 host
+      # ============================================================
 
       - name: Install build tools
         run: |
@@ -40,11 +46,10 @@ jobs:
             gcc-arm-linux-gnueabihf \
             g++-arm-linux-gnueabihf \
             binutils-arm-linux-gnueabihf \
-            dpkg-dev \
-            wget \
-            curl \
             make \
             perl \
+            wget \
+            curl \
             tar \
             gzip \
             xz-utils \
@@ -55,11 +60,11 @@ jobs:
             automake \
             libtool
 
+
       # ============================================================
       # QEMU
       #
-      # Only used later for testing the FINAL ARMv7 image.
-      # We do NOT use QEMU to run apt during sysroot creation.
+      # Used only to run the final ARMv7 image.
       # ============================================================
 
       - name: Set up QEMU
@@ -67,23 +72,25 @@ jobs:
         with:
           platforms: arm
 
+
+      # ============================================================
+      # Buildx
+      # ============================================================
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+
       # ============================================================
-      # Create Trusty ARMhf sysroot
+      # Create ARMv7 Ubuntu 14.04 sysroot
       #
-      # IMPORTANT:
+      # The ARMv7 Ubuntu container is used directly.
       #
-      # Do not apt-get inside ubuntu:14.04 ARMv7 here.
-      #
-      # That executes ARM binaries through QEMU and can cause
-      # exit code 137 / OOM.
-      #
-      # Instead, download the ARMhf .deb files and extract them.
+      # We install the development packages inside the container,
+      # then docker-export the resulting filesystem.
       # ============================================================
 
-      - name: Create Ubuntu 14.04 ARMhf sysroot
+      - name: Create Ubuntu 14.04 ARMv7 sysroot
         shell: bash
         run: |
           set -eux
@@ -91,163 +98,131 @@ jobs:
           rm -rf "$SYSROOT"
           mkdir -p "$SYSROOT"
 
-          WORK="$RUNNER_TEMP/trusty"
-          rm -rf "$WORK"
-          mkdir -p "$WORK"
+          docker pull --platform linux/arm/v7 ubuntu:14.04
 
-          cd "$WORK"
+          CID=$(docker create \
+            --platform linux/arm/v7 \
+            --memory=6g \
+            --memory-swap=6g \
+            ubuntu:14.04 \
+            /bin/bash)
 
-          # --------------------------------------------------------
-          # Download Trusty ARMhf package indexes.
-          # --------------------------------------------------------
-
-          wget -q \
-            http://old-releases.ubuntu.com/ubuntu/dists/trusty/main/binary-armhf/Packages.gz \
-            -O Packages.main.gz
-
-          wget -q \
-            http://old-releases.ubuntu.com/ubuntu/dists/trusty-updates/main/binary-armhf/Packages.gz \
-            -O Packages.updates.gz
-
-          gzip -dc Packages.main.gz > Packages.main
-          gzip -dc Packages.updates.gz > Packages.updates
-
-          # --------------------------------------------------------
-          # Extract package metadata.
-          # --------------------------------------------------------
-
-          package_filename() {
-            local package="$1"
-            local index="$2"
-
-            awk -v pkg="$package" '
-              $1 == "Package:" && $2 == pkg {
-                found=1
-              }
-
-              found && $1 == "Filename:" {
-                print $2
-                exit
-              }
-
-              found && /^$/ {
-                found=0
-              }
-            ' "$index"
+          cleanup() {
+            docker rm -f "$CID" >/dev/null 2>&1 || true
           }
 
-          download_package() {
-            local package="$1"
-            local filename=""
-            local deb=""
+          trap cleanup EXIT
 
-            filename="$(package_filename "$package" Packages.updates || true)"
+          docker start "$CID"
 
-            if [ -z "$filename" ]; then
-              filename="$(package_filename "$package" Packages.main || true)"
-            fi
+          docker exec "$CID" bash -c '
+            set -eux
 
-            if [ -z "$filename" ]; then
-              echo "ERROR: Cannot find package: $package"
-              exit 1
-            fi
+            # ------------------------------------------------------
+            # Ubuntu 14.04 is EOL.
+            # Redirect Trusty repositories to old-releases.
+            # ------------------------------------------------------
 
-            deb="$(basename "$filename")"
+            sed -i \
+              -e "s|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" \
+              -e "s|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" \
+              /etc/apt/sources.list
 
-            echo
-            echo "============================================================"
-            echo "Downloading: $package"
-            echo "File:        $deb"
-            echo "============================================================"
+            # ------------------------------------------------------
+            # Keep apt as small as possible.
+            # ------------------------------------------------------
 
-            wget -q \
-              "http://old-releases.ubuntu.com/ubuntu/$filename" \
-              -O "$WORK/$deb"
+            cat >/etc/apt/apt.conf.d/99minimal <<EOF
+            APT::Install-Recommends "false";
+            APT::Install-Suggests "false";
+            Acquire::Languages "none";
+            EOF
 
-            dpkg-deb -x \
-              "$WORK/$deb" \
-              "$SYSROOT"
-          }
+            # ------------------------------------------------------
+            # Update package lists.
+            # ------------------------------------------------------
 
-          # --------------------------------------------------------
-          # libc runtime + development files
-          # --------------------------------------------------------
+            apt-get update
 
-          download_package libc6
-          download_package libc6-dev
+            # ------------------------------------------------------
+            # Development libraries required by Python.
+            # ------------------------------------------------------
 
-          # --------------------------------------------------------
-          # Kernel headers
-          # --------------------------------------------------------
+            apt-get install -y \
+              libc6-dev \
+              linux-libc-dev \
+              zlib1g-dev \
+              libffi-dev \
+              libexpat1-dev \
+              libbz2-dev \
+              libsqlite3-dev \
+              libncurses5-dev \
+              libreadline6-dev \
+              libgdbm-dev \
+              liblzma-dev
 
-          download_package linux-libc-dev
+            # ------------------------------------------------------
+            # Remove apt cache.
+            # The actual filesystem will become our sysroot.
+            # ------------------------------------------------------
 
-          # --------------------------------------------------------
-          # GCC runtime
-          # --------------------------------------------------------
-
-          download_package libgcc1
-          download_package libstdc++6
-
-          # --------------------------------------------------------
-          # Python dependencies
-          # --------------------------------------------------------
-
-          download_package zlib1g
-          download_package zlib1g-dev
-
-          download_package libffi6
-          download_package libffi-dev
-
-          download_package libexpat1
-          download_package libexpat1-dev
+            rm -rf /var/lib/apt/lists/*
+            rm -rf /var/cache/apt/*
+          '
 
           # --------------------------------------------------------
-          # Verify critical files.
+          # Export the ARMv7 filesystem.
           # --------------------------------------------------------
+
+          docker export "$CID" \
+            | tar -C "$SYSROOT" -xf -
 
           echo
-          echo "=== libc ==="
+          echo "============================================================"
+          echo "SYSROOT"
+          echo "============================================================"
 
-          find "$SYSROOT" \
-            -name 'libc-2.19.so' \
-            -o -name 'libc.so.6'
-
-          echo
-          echo "=== dynamic loader ==="
-
-          find "$SYSROOT" \
-            -name 'ld-2.19.so' \
-            -o -name 'ld-linux-armhf.so.3'
+          du -sh "$SYSROOT"
 
           echo
-          echo "=== headers ==="
+          echo "libc:"
+
+          file \
+            "$SYSROOT/lib/arm-linux-gnueabihf/libc-2.19.so"
+
+          echo
+          echo "dynamic loader:"
+
+          file \
+            "$SYSROOT/lib/ld-linux-armhf.so.3"
+
+          echo
+          echo "headers:"
 
           test -f "$SYSROOT/usr/include/stdio.h"
           test -f "$SYSROOT/usr/include/stdlib.h"
 
-          echo
-          echo "=== ARM libc ==="
+          echo "OK"
 
-          file "$SYSROOT/lib/arm-linux-gnueabihf/libc-2.19.so"
-
-          echo
-          echo "=== sysroot size ==="
-
-          du -sh "$SYSROOT"
 
       # ============================================================
-      # Configure cross compiler environment
+      # Verify cross compiler
       # ============================================================
 
-      - name: Verify cross compiler
+      - name: Test cross compiler
         shell: bash
         run: |
           set -eux
 
-          "$TARGET-gcc" --version
+          cat > "$RUNNER_TEMP/test.c" <<'EOF'
+          #include <stdio.h>
 
-          echo 'int main(void) { return 0; }' > "$RUNNER_TEMP/test.c"
+          int main(void)
+          {
+              printf("hello ARM\n");
+              return 0;
+          }
+          EOF
 
           "$TARGET-gcc" \
             --sysroot="$SYSROOT" \
@@ -257,14 +232,19 @@ jobs:
             "$RUNNER_TEMP/test.c" \
             -o "$RUNNER_TEMP/test"
 
+          echo
+          echo "Binary:"
           file "$RUNNER_TEMP/test"
 
+          echo
+          echo "Interpreter:"
           "$TARGET-readelf" \
             -l "$RUNNER_TEMP/test" \
             | grep interpreter
 
+
       # ============================================================
-      # Build OpenSSL 1.1.1w
+      # Download OpenSSL
       # ============================================================
 
       - name: Download OpenSSL
@@ -282,7 +262,12 @@ jobs:
           tar xf \
             "openssl-${OPENSSL_VERSION}.tar.gz"
 
-      - name: Build OpenSSL 1.1.1w
+
+      # ============================================================
+      # Build OpenSSL 1.1.1w
+      # ============================================================
+
+      - name: Build OpenSSL
         shell: bash
         run: |
           set -eux
@@ -322,7 +307,7 @@ jobs:
             DESTDIR="$RUNNER_TEMP/openssl-stage"
 
           # --------------------------------------------------------
-          # Strip target binaries.
+          # Strip ARM binaries/libraries.
           # --------------------------------------------------------
 
           find \
@@ -333,24 +318,18 @@ jobs:
               -o -name '*.so' \
               -o -name '*.so.*' \
             \) \
-            -exec "$TARGET-strip" --strip-unneeded {} \; || true
+            -exec "$TARGET-strip" --strip-unneeded {} \; \
+            || true
 
           echo
-          echo "=== OpenSSL files ==="
+          echo "OpenSSL:"
+          "$TARGET-readelf" \
+            -h \
+            "$RUNNER_TEMP/openssl-stage/opt/openssl/bin/openssl"
 
-          find \
-            "$RUNNER_TEMP/openssl-stage/opt/openssl" \
-            -maxdepth 3 \
-            -type f \
-            | sort
 
       # ============================================================
-      # Build native Python 3.7.5
-      #
-      # This Python runs on the ARM64 GitHub runner and is used by
-      # the Python 3.7 build system.
-      #
-      # Python 3.7 predates --with-build-python.
+      # Download Python 3.7.5
       # ============================================================
 
       - name: Download Python 3.7.5
@@ -366,7 +345,16 @@ jobs:
           tar xf \
             "Python-${PYTHON_VERSION}.tgz"
 
-      - name: Build native Python 3.7.5
+
+      # ============================================================
+      # Build native Python 3.7.5
+      #
+      # This Python executes on the ARM64 build machine.
+      #
+      # Python 3.7 predates --with-build-python.
+      # ============================================================
+
+      - name: Build host Python
         shell: bash
         run: |
           set -eux
@@ -382,34 +370,40 @@ jobs:
 
           make install
 
-          "$RUNNER_TEMP/host-python/bin/python3.7" --version
+          "$RUNNER_TEMP/host-python/bin/python3.7" \
+            --version
+
 
       # ============================================================
-      # Build ARMv7 Python 3.7.5
-      #
-      # Python 3.7's build system needs HOSTPYTHON/HOSTPGEN when
-      # cross compiling.
+      # Copy Python source for ARMv7 build
       # ============================================================
 
-      - name: Prepare Python ARMv7 source tree
+      - name: Prepare ARMv7 Python source
         shell: bash
         run: |
           set -eux
 
           cd "$RUNNER_TEMP/src"
 
-          rm -rf "Python-${PYTHON_VERSION}-arm"
+          rm -rf \
+            "Python-${PYTHON_VERSION}-arm"
 
           cp -a \
             "Python-${PYTHON_VERSION}" \
             "Python-${PYTHON_VERSION}-arm"
+
+
+      # ============================================================
+      # Configure Python ARMv7
+      # ============================================================
 
       - name: Configure Python ARMv7
         shell: bash
         run: |
           set -eux
 
-          cd "$RUNNER_TEMP/src/Python-${PYTHON_VERSION}-arm"
+          cd \
+            "$RUNNER_TEMP/src/Python-${PYTHON_VERSION}-arm"
 
           export CC="${TARGET}-gcc"
           export CXX="${TARGET}-g++"
@@ -447,13 +441,10 @@ jobs:
           "
 
           # --------------------------------------------------------
-          # Python 3.7 cross-build settings.
+          # Python 3.7 cross-compilation variables.
           # --------------------------------------------------------
 
           export HOSTPYTHON="$RUNNER_TEMP/host-python/bin/python3.7"
-
-          # pgen is generated by the host build.
-          export HOSTPGEN="$PWD/Parser/pgen"
 
           export CROSS_COMPILE="${TARGET}-"
           export CROSS_COMPILE_TARGET=yes
@@ -462,10 +453,10 @@ jobs:
           export BUILDARCH="arm-linux-gnueabihf"
 
           # --------------------------------------------------------
-          # configure cache:
+          # configure cache
           #
-          # These prevent configure from attempting to execute
-          # ARM binaries on the ARM64 build host.
+          # Prevent configure from attempting to execute ARM
+          # binaries on the ARM64 host.
           # --------------------------------------------------------
 
           cat > config.site <<'EOF'
@@ -487,6 +478,7 @@ jobs:
             ac_cv_file__dev_ptmx=yes \
             ac_cv_file__dev_ptc=no
 
+
       # ============================================================
       # Build Python ARMv7
       # ============================================================
@@ -496,7 +488,8 @@ jobs:
         run: |
           set -eux
 
-          cd "$RUNNER_TEMP/src/Python-${PYTHON_VERSION}-arm"
+          cd \
+            "$RUNNER_TEMP/src/Python-${PYTHON_VERSION}-arm"
 
           export CC="${TARGET}-gcc"
           export CXX="${TARGET}-g++"
@@ -506,7 +499,6 @@ jobs:
           export STRIP="${TARGET}-strip"
 
           export HOSTPYTHON="$RUNNER_TEMP/host-python/bin/python3.7"
-          export HOSTPGEN="$PWD/Parser/pgen"
 
           export CROSS_COMPILE="${TARGET}-"
           export CROSS_COMPILE_TARGET=yes
@@ -515,6 +507,7 @@ jobs:
           export BUILDARCH="arm-linux-gnueabihf"
 
           make -j"$(nproc)"
+
 
       # ============================================================
       # Install Python ARMv7
@@ -525,10 +518,10 @@ jobs:
         run: |
           set -eux
 
-          cd "$RUNNER_TEMP/src/Python-${PYTHON_VERSION}-arm"
+          cd \
+            "$RUNNER_TEMP/src/Python-${PYTHON_VERSION}-arm"
 
           export HOSTPYTHON="$RUNNER_TEMP/host-python/bin/python3.7"
-          export HOSTPGEN="$PWD/Parser/pgen"
 
           export CROSS_COMPILE="${TARGET}-"
           export CROSS_COMPILE_TARGET=yes
@@ -539,58 +532,52 @@ jobs:
           make install \
             DESTDIR="$RUNNER_TEMP/python-stage"
 
+
       # ============================================================
-      # Fix runtime library paths
+      # Strip Python
       # ============================================================
 
-      - name: Prepare Python installation
+      - name: Strip Python
         shell: bash
         run: |
           set -eux
 
           PYTHON_ROOT="$RUNNER_TEMP/python-stage/opt/python"
 
-          # --------------------------------------------------------
-          # Python shared library
-          # --------------------------------------------------------
-
-          find "$PYTHON_ROOT" \
-            -type f \
-            \( -name 'libpython3.7m.so*' -o -name '*.so' \) \
-            -exec "$TARGET-strip" --strip-unneeded {} \; \
-            || true
-
-          # --------------------------------------------------------
           # Python executable
-          # --------------------------------------------------------
 
           "$TARGET-strip" \
             --strip-unneeded \
             "$PYTHON_ROOT/bin/python3.7"
 
-          # --------------------------------------------------------
-          # Python normally installs libpython under lib/.
-          #
-          # Give the executable an RPATH so it works without requiring
-          # LD_LIBRARY_PATH for Python itself.
-          #
-          # patchelf is not guaranteed to exist on the runner, so
-          # leave this to the final image environment.
-          # --------------------------------------------------------
-
-          echo
-          echo "=== Python installation ==="
+          # Shared libraries
 
           find "$PYTHON_ROOT" \
-            -maxdepth 3 \
             -type f \
-            | sort
+            -name '*.so' \
+            -exec "$TARGET-strip" \
+              --strip-unneeded {} \; \
+            || true
+
+          find "$PYTHON_ROOT" \
+            -type f \
+            -name 'libpython3.7m.so*' \
+            -exec "$TARGET-strip" \
+              --strip-unneeded {} \; \
+            || true
+
+          echo
+          echo "Python installation:"
+          du -sh "$PYTHON_ROOT"
+
+          find "$PYTHON_ROOT/bin" -maxdepth 1 -type f -print
+
 
       # ============================================================
-      # Verify ARM architecture + glibc requirements
+      # Verify resulting ARM binaries
       # ============================================================
 
-      - name: Verify Python and OpenSSL binaries
+      - name: Verify Python and OpenSSL
         shell: bash
         run: |
           set -eux
@@ -598,18 +585,20 @@ jobs:
           PY="$RUNNER_TEMP/python-stage/opt/python/bin/python3.7"
           SSL="$RUNNER_TEMP/openssl-stage/opt/openssl/bin/openssl"
 
+          echo
           echo "============================================================"
           echo "Python"
           echo "============================================================"
 
           file "$PY"
 
+          echo
           "$TARGET-readelf" \
             -l "$PY" \
             | grep interpreter
 
           echo
-          echo "Python GLIBC symbols:"
+          echo "Python GLIBC requirements:"
 
           "$TARGET-readelf" \
             --version-info "$PY" \
@@ -624,12 +613,13 @@ jobs:
 
           file "$SSL"
 
+          echo
           "$TARGET-readelf" \
             -l "$SSL" \
             | grep interpreter
 
           echo
-          echo "OpenSSL GLIBC symbols:"
+          echo "OpenSSL GLIBC requirements:"
 
           "$TARGET-readelf" \
             --version-info "$SSL" \
@@ -639,38 +629,41 @@ jobs:
 
           echo
           echo "============================================================"
-          echo "Python OpenSSL linkage"
+          echo "Python dependencies"
           echo "============================================================"
 
           "$TARGET-readelf" \
             -d "$PY" \
-            | grep -E 'NEEDED|RPATH|RUNPATH' \
+            | grep NEEDED \
             || true
 
+
       # ============================================================
-      # Create final Ubuntu 14.04 ARMv7 Docker image
+      # Assemble final Docker build context
       # ============================================================
 
-      - name: Assemble Docker build context
+      - name: Create Docker build context
         shell: bash
         run: |
           set -eux
 
-          rm -rf "$RUNNER_TEMP/docker-context"
+          CONTEXT="$RUNNER_TEMP/docker-context"
+
+          rm -rf "$CONTEXT"
 
           mkdir -p \
-            "$RUNNER_TEMP/docker-context/openssl-stage/opt" \
-            "$RUNNER_TEMP/docker-context/python-stage/opt"
+            "$CONTEXT/openssl-stage/opt" \
+            "$CONTEXT/python-stage/opt"
 
           cp -a \
             "$RUNNER_TEMP/openssl-stage/opt/openssl" \
-            "$RUNNER_TEMP/docker-context/openssl-stage/opt/"
+            "$CONTEXT/openssl-stage/opt/"
 
           cp -a \
             "$RUNNER_TEMP/python-stage/opt/python" \
-            "$RUNNER_TEMP/docker-context/python-stage/opt/"
+            "$CONTEXT/python-stage/opt/"
 
-          cat > "$RUNNER_TEMP/docker-context/Dockerfile" <<'EOF'
+          cat > "$CONTEXT/Dockerfile" <<'EOF'
           FROM --platform=linux/arm/v7 ubuntu:14.04
 
           ENV PATH="/opt/python/bin:/opt/openssl/bin:${PATH}"
@@ -688,11 +681,12 @@ jobs:
           CMD ["/bin/bash"]
           EOF
 
+
       # ============================================================
-      # Build ARMv7 Docker image
+      # Build final ARMv7 Docker image
       # ============================================================
 
-      - name: Build Docker image
+      - name: Build ARMv7 Docker image
         shell: bash
         run: |
           set -eux
@@ -705,8 +699,11 @@ jobs:
             --tag kindle-python:armv7 \
             .
 
+
       # ============================================================
-      # Run actual ARMv7 tests through QEMU
+      # Test final ARMv7 image
+      #
+      # QEMU is used here, and ONLY here.
       # ============================================================
 
       - name: Test ARMv7 Docker image
@@ -721,51 +718,86 @@ jobs:
             bash -c '
               set -eux
 
-              echo "=== Architecture ==="
+              echo
+              echo "============================================================"
+              echo "Architecture"
+              echo "============================================================"
+
               uname -m
 
               echo
-              echo "=== OS ==="
+              echo "============================================================"
+              echo "Operating system"
+              echo "============================================================"
+
               cat /etc/os-release
 
               echo
-              echo "=== libc ==="
+              echo "============================================================"
+              echo "glibc"
+              echo "============================================================"
+
               ldd --version | head -1
 
               echo
-              echo "=== Python ==="
+              echo "============================================================"
+              echo "Python"
+              echo "============================================================"
+
               python3.7 --version
 
               python3.7 \
                 -c "import sys; print(sys.version)"
 
               echo
-              echo "=== ssl module ==="
+              echo "============================================================"
+              echo "OpenSSL through Python"
+              echo "============================================================"
+
               python3.7 \
                 -c "import ssl; print(ssl.OPENSSL_VERSION)"
 
               echo
-              echo "=== hashlib ==="
+              echo "============================================================"
+              echo "hashlib"
+              echo "============================================================"
+
               python3.7 \
                 -c "import hashlib; print(hashlib.sha256(b\"test\").hexdigest())"
 
               echo
-              echo "=== ctypes ==="
+              echo "============================================================"
+              echo "ctypes"
+              echo "============================================================"
+
               python3.7 \
                 -c "import ctypes; print(\"ctypes OK\")"
 
               echo
-              echo "=== OpenSSL ==="
+              echo "============================================================"
+              echo "OpenSSL"
+              echo "============================================================"
+
               openssl version
 
               echo
-              echo "=== Python executable ==="
-              file /opt/python/bin/python3.7
+              echo "============================================================"
+              echo "Python shared library"
+              echo "============================================================"
+
+              find /opt/python/lib \
+                -maxdepth 1 \
+                -name "libpython3.7m.so*" \
+                -print
 
               echo
-              echo "=== Dynamic dependencies ==="
+              echo "============================================================"
+              echo "Python dynamic dependencies"
+              echo "============================================================"
+
               ldd /opt/python/bin/python3.7
             '
+
 
       # ============================================================
       # Export Docker image
@@ -784,8 +816,9 @@ jobs:
           ls -lh \
             "$GITHUB_WORKSPACE/ubuntu14.04-armv7-python3.7.5-openssl1.1.1w.tar.zst"
 
+
       # ============================================================
-      # Upload Docker image as GitHub Actions artifact
+      # Upload artifact
       # ============================================================
 
       - name: Upload Docker image
