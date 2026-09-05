@@ -1,10 +1,11 @@
 FROM --platform=linux/arm/v7 ubuntu:14.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+ENV PATH="/opt/python-3.7.5/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # ============================================================
-# UBUNTU 14.04 REPOSITORIES
+# Ubuntu 14.04 repositories
 # ============================================================
 
 RUN sed -i \
@@ -12,10 +13,17 @@ RUN sed -i \
         /etc/apt/sources.list \
     && sed -i \
         's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' \
-        /etc/apt/sources.list \
-    && apt-get update \
+        /etc/apt/sources.list
+
+
+# ============================================================
+# Runtime / development libraries
+#
+# These come from Ubuntu rather than being cross-compiled.
+# ============================================================
+
+RUN apt-get update \
     && apt-get install -y \
-        build-essential \
         ca-certificates \
         curl \
         wget \
@@ -23,7 +31,6 @@ RUN sed -i \
         make \
         gcc \
         g++ \
-        patch \
         pkg-config \
         zlib1g \
         zlib1g-dev \
@@ -35,6 +42,7 @@ RUN sed -i \
         libffi-dev \
         liblzma-dev \
         tk-dev \
+        tcl-dev \
         libx11-6 \
         libx11-dev \
         libxext6 \
@@ -54,84 +62,30 @@ RUN sed -i \
 
 
 # ============================================================
-# OPENSSL 1.1.1
+# Cross-compiled OpenSSL
 # ============================================================
 
-WORKDIR /tmp
-
-RUN wget \
-        https://www.openssl.org/source/openssl-1.1.1.tar.gz \
-    && tar -xzf openssl-1.1.1.tar.gz \
-    && cd openssl-1.1.1 \
-    && ./config \
-        --prefix=/opt/openssl-1.1.1 \
-        --openssldir=/opt/openssl-1.1.1 \
-        shared \
-        zlib \
-    && make -j4 \
-    && make install \
-    && cd / \
-    && rm -rf \
-        /tmp/openssl-1.1.1 \
-        /tmp/openssl-1.1.1.tar.gz
-
-
-# ============================================================
-# OPENSSL
-#
-# IMPORTANT:
-# Do NOT set LD_LIBRARY_PATH globally.
-#
-# Doing so would cause system programs such as wget/curl/git
-# to load the old OpenSSL 1.1.1 libraries.
-# ============================================================
+COPY cross/opt/openssl-1.1.1 /opt/openssl-1.1.1
 
 ENV OPENSSL_ROOT=/opt/openssl-1.1.1
 
 
 # ============================================================
-# DOWNLOAD PYTHON
-#
-# This happens using Ubuntu's normal/system OpenSSL.
+# Cross-compiled Python
 # ============================================================
 
-WORKDIR /tmp
-
-RUN wget \
-        https://www.python.org/ftp/python/3.7.5/Python-3.7.5.tgz \
-    && tar -xzf Python-3.7.5.tgz
+COPY cross/opt/python-3.7.5 /opt/python-3.7.5
 
 
 # ============================================================
-# BUILD PYTHON 3.7.5
-#
-# Explicitly use our OpenSSL.
+# Runtime library search path
 # ============================================================
 
-WORKDIR /tmp/Python-3.7.5
-
-RUN export CPPFLAGS="-I/opt/openssl-1.1.1/include" \
-    && export CFLAGS="-I/opt/openssl-1.1.1/include" \
-    && export LDFLAGS="-L/opt/openssl-1.1.1/lib -Wl,-rpath,/opt/openssl-1.1.1/lib" \
-    && export LD_RUN_PATH="/opt/openssl-1.1.1/lib" \
-    && ./configure \
-        --prefix=/opt/python-3.7.5 \
-        --with-openssl=/opt/openssl-1.1.1 \
-    && make -j4 \
-    && make install
+ENV LD_LIBRARY_PATH="/opt/openssl-1.1.1/lib:/opt/python-3.7.5/lib"
 
 
 # ============================================================
-# CLEAN PYTHON SOURCE
-# ============================================================
-
-RUN rm -rf \
-        /tmp/Python-3.7.5 \
-        /tmp/Python-3.7.5.tgz
-
-
-# ============================================================
-# VERIFY PYTHON
+# Python verification
 # ============================================================
 
 RUN /opt/python-3.7.5/bin/python3 --version \
@@ -144,7 +98,7 @@ RUN /opt/python-3.7.5/bin/python3 --version \
 
 
 # ============================================================
-# PIP
+# pip
 # ============================================================
 
 RUN /opt/python-3.7.5/bin/python3 -m ensurepip \
@@ -156,14 +110,7 @@ RUN /opt/python-3.7.5/bin/python3 -m ensurepip \
 
 
 # ============================================================
-# PYINSTALLER
-# ============================================================
-
-RUN /opt/python-3.7.5/bin/python3 -m pip install pyinstaller
-
-
-# ============================================================
-# WORKSPACE
+# Application workspace
 # ============================================================
 
 WORKDIR /src
