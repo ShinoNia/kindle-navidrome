@@ -1,11 +1,10 @@
 FROM --platform=linux/arm/v7 ubuntu:14.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-
-ENV PATH="/opt/python-3.7.5/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # ============================================================
-# Ubuntu 14.04 repositories
+# UBUNTU 14.04 REPOSITORIES
 # ============================================================
 
 RUN sed -i \
@@ -13,14 +12,8 @@ RUN sed -i \
         /etc/apt/sources.list \
     && sed -i \
         's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' \
-        /etc/apt/sources.list
-
-
-# ============================================================
-# Ubuntu ARMv7 dependencies
-# ============================================================
-
-RUN apt-get update \
+        /etc/apt/sources.list \
+    && apt-get update \
     && apt-get install -y \
         build-essential \
         ca-certificates \
@@ -32,27 +25,16 @@ RUN apt-get update \
         g++ \
         patch \
         pkg-config \
-        file \
-        binutils \
-        \
         zlib1g \
         zlib1g-dev \
-        \
         libbz2-dev \
         libreadline-dev \
         libsqlite3-dev \
-        \
         libncurses5-dev \
         libncursesw5-dev \
-        \
         libffi-dev \
         liblzma-dev \
-        \
-        tcl8.6 \
-        tcl8.6-dev \
-        tk8.6 \
-        tk8.6-dev \
-        \
+        tk-dev \
         libx11-6 \
         libx11-dev \
         libxext6 \
@@ -61,27 +43,56 @@ RUN apt-get update \
         libxrender-dev \
         libxft2 \
         libxft-dev \
-        \
         libjpeg-dev \
         libpng12-dev \
         libfreetype6-dev \
-        \
-        libflac8 \
         libflac-dev \
+        libflac8 \
+        file \
+        binutils \
     && rm -rf /var/lib/apt/lists/*
 
 
 # ============================================================
-# CROSS-COMPILED OPENSSL
+# OPENSSL 1.1.1w
 # ============================================================
 
-COPY openssl-armv7 /opt/openssl-1.1.1
+WORKDIR /tmp
 
-ENV OPENSSL_ROOT=/opt/openssl-1.1.1
+RUN wget \
+        https://www.openssl.org/source/openssl-1.1.1w.tar.gz \
+    && tar -xzf openssl-1.1.1w.tar.gz \
+    && cd openssl-1.1.1w \
+    && ./config \
+        --prefix=/opt/openssl-1.1.1w \
+        --openssldir=/opt/openssl-1.1.1w \
+        shared \
+        zlib \
+    && make -j4 \
+    && make install \
+    && cd / \
+    && rm -rf \
+        /tmp/openssl-1.1.1w \
+        /tmp/openssl-1.1.1w.tar.gz
 
 
 # ============================================================
-# Python source
+# OPENSSL
+#
+# IMPORTANT:
+# Do NOT set LD_LIBRARY_PATH globally.
+#
+# Doing so would cause system programs such as wget/curl/git
+# to load the old OpenSSL 1.1.1w libraries.
+# ============================================================
+
+ENV OPENSSL_ROOT=/opt/openssl-1.1.1w
+
+
+# ============================================================
+# DOWNLOAD PYTHON
+#
+# This happens using Ubuntu's normal/system OpenSSL.
 # ============================================================
 
 WORKDIR /tmp
@@ -92,28 +103,26 @@ RUN wget \
 
 
 # ============================================================
-# Build Python ARMv7
+# BUILD PYTHON 3.7.5
 #
-# This still runs through QEMU.
-#
-# However, the expensive OpenSSL build no longer does.
+# Explicitly use our OpenSSL.
 # ============================================================
 
 WORKDIR /tmp/Python-3.7.5
 
-RUN export CPPFLAGS="-I/opt/openssl-1.1.1/include" \
-    && export CFLAGS="-I/opt/openssl-1.1.1/include" \
-    && export LDFLAGS="-L/opt/openssl-1.1.1/lib -Wl,-rpath,/opt/openssl-1.1.1/lib" \
-    && export LD_RUN_PATH="/opt/openssl-1.1.1/lib" \
+RUN export CPPFLAGS="-I/opt/openssl-1.1.1w/include" \
+    && export CFLAGS="-I/opt/openssl-1.1.1w/include" \
+    && export LDFLAGS="-L/opt/openssl-1.1.1w/lib -Wl,-rpath,/opt/openssl-1.1.1w/lib" \
+    && export LD_RUN_PATH="/opt/openssl-1.1.1w/lib" \
     && ./configure \
         --prefix=/opt/python-3.7.5 \
-        --with-openssl=/opt/openssl-1.1.1 \
+        --with-openssl=/opt/openssl-1.1.1w \
     && make -j4 \
     && make install
 
 
 # ============================================================
-# Clean source
+# CLEAN PYTHON SOURCE
 # ============================================================
 
 RUN rm -rf \
@@ -122,7 +131,7 @@ RUN rm -rf \
 
 
 # ============================================================
-# Verify Python
+# VERIFY PYTHON
 # ============================================================
 
 RUN /opt/python-3.7.5/bin/python3 --version \
@@ -135,7 +144,7 @@ RUN /opt/python-3.7.5/bin/python3 --version \
 
 
 # ============================================================
-# pip
+# PIP
 # ============================================================
 
 RUN /opt/python-3.7.5/bin/python3 -m ensurepip \
@@ -147,16 +156,14 @@ RUN /opt/python-3.7.5/bin/python3 -m ensurepip \
 
 
 # ============================================================
-# NumPy / Pillow
-#
-# These are intentionally built inside ARMv7.
+# PYINSTALLER
 # ============================================================
 
-RUN /opt/python-3.7.5/bin/python3 -m pip install numpy pillow
+RUN /opt/python-3.7.5/bin/python3 -m pip install pyinstaller numpy pyflac requests Pillow
 
 
 # ============================================================
-# Workspace
+# WORKSPACE
 # ============================================================
 
 WORKDIR /src
